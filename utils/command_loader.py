@@ -25,6 +25,7 @@ def load_commands():
             continue
         
         for file_path in folder_path.glob('*.py'):
+            # Skip __init__.py files
             if file_path.name == '__init__.py':
                 skipped_count += 1
                 continue
@@ -34,16 +35,20 @@ def load_commands():
             try:
                 module = importlib.import_module(module_name)
                 
+                # Check if it's a valid command module
                 if not hasattr(module, 'COMMAND_NAME'):
+                    print(f"⏭️ Skipping {file_path.name}: No COMMAND_NAME defined")
                     skipped_count += 1
                     continue
                 
                 if not hasattr(module, 'execute'):
+                    print(f"⏭️ Skipping {file_path.name}: No execute function")
                     skipped_count += 1
                     continue
                 
                 command_name = getattr(module, 'COMMAND_NAME', file_path.stem)
                 
+                # Store the command
                 COMMANDS[command_name] = {
                     'name': command_name,
                     'aliases': getattr(module, 'ALIASES', []),
@@ -57,6 +62,7 @@ def load_commands():
                     'function': getattr(module, 'execute')
                 }
                 
+                # Register aliases
                 for alias in COMMANDS[command_name]['aliases']:
                     ALIASES[alias] = command_name
                 
@@ -72,14 +78,18 @@ def load_commands():
 
 def get_command(command_name):
     """Get command by name (including aliases)"""
+    # Check direct command
     if command_name in COMMANDS:
         return COMMANDS[command_name]
+    
+    # Check alias
     if command_name in ALIASES:
         return COMMANDS[ALIASES[command_name]]
+    
+    # ✅ Fallback: If command not found, return None
     return None
 
 def get_commands_by_category(category):
     """Get all commands in a category"""
     return {name: info for name, info in COMMANDS.items() if info.get('category') == category}
-    
     

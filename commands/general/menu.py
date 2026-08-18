@@ -66,7 +66,7 @@ COMMAND_LABELS = {
     'song': '🎵 Song',
     'video': '🎬 Video',
     'bomb': '💣 Bomb Game',
-    'tictactoe': '❌ ⭕ TicTacToe',
+    'tictactoe': '❌⭕ TicTacToe',
     'qwen': '🧠 Qwen AI',
     'wormgpt': '🐛 WormGPT',
 }
@@ -107,22 +107,29 @@ def get_commands_for_category(category):
     return commands
 
 # ============================================
-# SEND MENU WITH IMAGE (FIXED)
+# SEND MENU WITH IMAGE
 # ============================================
 async def send_menu_with_image(update_obj, context, text, reply_markup, is_callback=False):
     """Send menu with image"""
     image_bytes = get_bot_image()
     
     if is_callback:
-        # From callback query - use query.message
         query = update_obj.callback_query
         if image_bytes:
-            # Edit caption and keep image
-            await query.edit_message_caption(
-                caption=text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                print(f"[MENU] Edit caption failed: {e}")
+                await query.message.reply_photo(
+                    photo=image_bytes,
+                    caption=text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
         else:
             await query.edit_message_text(
                 text,
@@ -130,7 +137,6 @@ async def send_menu_with_image(update_obj, context, text, reply_markup, is_callb
                 reply_markup=reply_markup
             )
     else:
-        # From direct message
         if image_bytes:
             await update_obj.message.reply_photo(
                 photo=image_bytes,
@@ -188,7 +194,6 @@ async def send_category_menu(update_obj, context, category_key):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # ✅ Fixed: Pass is_callback=True
     await send_menu_with_image(update_obj, context, menu_text, reply_markup, is_callback=True)
 
 # ============================================
@@ -220,14 +225,29 @@ async def send_main_menu(update_obj, context, message=None):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if message:
-        # Edit existing message - from callback
-        await message.edit_caption(
-            caption=menu_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        try:
+            await message.edit_caption(
+                caption=menu_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print(f"[MENU] Edit caption failed: {e}")
+            image_bytes = get_bot_image()
+            if image_bytes:
+                await message.reply_photo(
+                    photo=image_bytes,
+                    caption=menu_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                await message.reply_text(
+                    menu_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
     else:
-        # NEW message - from direct command
         await send_menu_with_image(update_obj, context, menu_text, reply_markup, is_callback=False)
 
 # ============================================
@@ -239,12 +259,12 @@ async def execute_command_from_callback(query, command_name, context):
     
     cmd_info = get_command(command_name)
     if not cmd_info:
-        await query.answer(f"Command /{command_name} not found", show_alert=True)
+        await query.answer(f"❌ Command /{command_name} not found", show_alert=True)
         return
     
     cmd_func = cmd_info['function']
     
-    # Create a proper extra object
+    # Create extra object
     extra = {
         'chat_id': query.message.chat.id,
         'user_id': query.from_user.id,
@@ -262,8 +282,10 @@ async def execute_command_from_callback(query, command_name, context):
     
     try:
         await cmd_func(None, context, [], extra)
+        await query.answer(f"✅ /{command_name} executed!", show_alert=False)
     except Exception as e:
-        await query.answer(f"Error: {str(e)[:50]}", show_alert=True)
+        print(f"[MENU] Error executing {command_name}: {e}")
+        await query.answer(f"❌ Error: {str(e)[:50]}", show_alert=True)
 
 # ============================================
 # BUTTON CALLBACK HANDLER
@@ -286,7 +308,7 @@ async def button_callback(update_obj, context):
     
     if data.startswith("cmd_"):
         command = data.replace("cmd_", "")
-        await query.answer(f"Executing /{command}...")
+        await query.answer(f"⏳ Executing /{command}...")
         
         # Execute command directly
         await execute_command_from_callback(query, command, context)
