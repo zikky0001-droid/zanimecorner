@@ -15,12 +15,28 @@ BOT_ADMIN_NEEDED = False
 async def execute(update, context, args, extra):
     """Restart the bot"""
     
-    # ============================================
-    # HANDLE BOTH DIRECT COMMAND AND MENU BUTTON
-    # ============================================
+    # Check if owner (in both cases)
+    user_id = None
+    if update:
+        user_id = update.effective_user.id
+    else:
+        user_id = extra.get('user_id')
     
-    # Restart message with styled formatting
-    restart_msg = """╭━༺ *RESTART* ༻━╮
+    from utils.permissions import is_owner
+    if not is_owner(user_id):
+        if update:
+            await update.message.reply_text("👑 This command is only for the bot owner!")
+        else:
+            reply = extra.get('reply')
+            if reply:
+                await reply("👑 This command is only for the bot owner!")
+            else:
+                bot = extra.get('bot')
+                chat_id = extra.get('chat_id')
+                await bot.send_message(chat_id, "👑 This command is only for the bot owner!")
+        return
+    
+    restart_msg = """╭━━━༺ *RESTART* ༻━━━╮
 ┃
 ┃ 🔄 *RESTARTING BOT...*
 ┃
@@ -29,25 +45,18 @@ async def execute(update, context, args, extra):
 ┃ 🔥 *ONLINE SHORTLY IN 30 SECS*
 ┃
 ╰━━━━━━━━━━━━━━━━╯
-*ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ*"""
+> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ*"""
     
     if update:
-        # Direct command
         await update.message.reply_text(restart_msg, parse_mode='Markdown')
     else:
-        # From menu button
-        reply_func = extra.get('reply')
-        if reply_func:
-            await reply_func(restart_msg)
+        reply = extra.get('reply')
+        if reply:
+            await reply(restart_msg)
         else:
             bot = extra.get('bot')
             chat_id = extra.get('chat_id')
-            await bot.send_message(
-                chat_id=chat_id,
-                text=restart_msg,
-                parse_mode='Markdown'
-            )
+            await bot.send_message(chat_id, restart_msg, parse_mode='Markdown')
     
-    # Exit to trigger restart
     sys.exit(0)
-        
+    

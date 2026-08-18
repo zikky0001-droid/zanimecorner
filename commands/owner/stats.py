@@ -16,7 +16,38 @@ BOT_ADMIN_NEEDED = False
 
 async def execute(update, context, args, extra):
     """Show bot statistics"""
-    import psutil
+    
+    # Check if owner
+    user_id = None
+    if update:
+        user_id = update.effective_user.id
+    else:
+        user_id = extra.get('user_id')
+    
+    from utils.permissions import is_owner
+    if not is_owner(user_id):
+        if update:
+            await update.message.reply_text("👑 This command is only for the bot owner!")
+        else:
+            reply = extra.get('reply')
+            if reply:
+                await reply("👑 This command is only for the bot owner!")
+            else:
+                bot = extra.get('bot')
+                chat_id = extra.get('chat_id')
+                await bot.send_message(chat_id, "👑 This command is only for the bot owner!")
+        return
+    
+    # Get reply function
+    if update:
+        async def reply(text):
+            await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        reply = extra.get('reply')
+        if not reply:
+            bot = extra.get('bot')
+            chat_id = extra.get('chat_id')
+            reply = lambda text: bot.send_message(chat_id, text, parse_mode='Markdown')
     
     # Bot uptime
     try:
@@ -28,6 +59,7 @@ async def execute(update, context, args, extra):
     
     # System stats
     try:
+        import psutil
         cpu = psutil.cpu_percent()
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
@@ -45,6 +77,5 @@ async def execute(update, context, args, extra):
     message += f"🧠 *Memory:* {memory.percent if memory != 'N/A' else 'N/A'}%\n"
     message += f"💾 *Disk:* {disk.percent if disk != 'N/A' else 'N/A'}%\n"
     
-    await update.message.reply_text(message, parse_mode='Markdown')
-    
+    await reply(message)
     

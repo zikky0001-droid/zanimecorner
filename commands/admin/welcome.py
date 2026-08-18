@@ -12,31 +12,37 @@ BOT_ADMIN_NEEDED = True
 async def execute(update, context, args, extra):
     """Configure welcome messages"""
     
-    # ============================================
-    # HANDLE BOTH DIRECT COMMAND AND MENU BUTTON
-    # ============================================
-    
+    # Get chat_id
     if update:
-        # Direct command
         chat = update.effective_chat
-        user = update.effective_user
+        chat_id = chat.id
+        if chat.type == 'private':
+            await update.message.reply_text("❌ This command can only be used in groups!")
+            return
         
         async def reply(text):
             await update.message.reply_text(text, parse_mode='Markdown')
     else:
-        # From menu button
-        reply_func = extra.get('reply')
-        if reply_func:
-            reply = reply_func
-        else:
-            bot = extra.get('bot')
-            chat_id = extra.get('chat_id')
-            async def reply(text):
-                await bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown')
+        chat_id = extra.get('chat_id')
+        bot = extra.get('bot')
+        reply = extra.get('reply')
+        
+        try:
+            chat = await bot.get_chat(chat_id)
+            if chat.type == 'private':
+                if reply:
+                    await reply("❌ This command can only be used in groups!")
+                else:
+                    await bot.send_message(chat_id, "❌ This command can only be used in groups!")
+                return
+        except:
+            pass
+        
+        if not reply:
+            reply = lambda text: bot.send_message(chat_id, text, parse_mode='Markdown')
     
     from utils.database import Database
     db = Database()
-    chat_id = update.effective_chat.id if update else extra.get('chat_id')
     
     if not args:
         settings = db.get_group_settings(chat_id)
@@ -67,9 +73,7 @@ async def execute(update, context, args, extra):
         await reply("❌ Welcome messages disabled for this group!")
     elif subcommand == 'set' and len(args) > 1:
         msg = ' '.join(args[1:])
-        # TODO: Store custom welcome message
         await reply(f"✅ Welcome message set:\n\n{msg}")
     else:
         await reply("❌ Invalid command. Use /welcome for help.")
-        
         

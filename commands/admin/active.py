@@ -12,39 +12,40 @@ BOT_ADMIN_NEEDED = False
 async def execute(update, context, args, extra):
     """Show active users in the group"""
     
-    # ============================================
-    # HANDLE BOTH DIRECT COMMAND AND MENU BUTTON
-    # ============================================
+    # Check if called from menu button
+    if not update:
+        # From menu button - get chat_id from extra
+        chat_id = extra.get('chat_id')
+        bot = extra.get('bot')
+        reply = extra.get('reply')
+        
+        # Get group chat
+        try:
+            chat = await bot.get_chat(chat_id)
+            if chat.type == 'private':
+                if reply:
+                    await reply("❌ This command can only be used in groups!")
+                else:
+                    await bot.send_message(chat_id, "❌ This command can only be used in groups!")
+                return
+        except:
+            pass
     
+    # Direct command
     if update:
-        # Direct command - from user typing /active
         chat = update.effective_chat
-        user = update.effective_user
+        if chat.type == 'private':
+            await update.message.reply_text("❌ This command can only be used in groups!")
+            return
         
         async def reply(text):
             await update.message.reply_text(text, parse_mode='Markdown')
     else:
-        # From menu button - update is None
-        chat_id = extra.get('chat_id')
-        user_id = extra.get('user_id')
-        user_name = extra.get('user_name', 'User')
-        reply_func = extra.get('reply')
-        
-        if not reply_func:
-            # Fallback: use bot to send message
-            bot = extra.get('bot')
-            chat_id = extra.get('chat_id')
-            async def reply(text):
-                await bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown')
-        else:
-            reply = reply_func
-    
-    # ============================================
-    # ACTIVE USERS LOGIC
-    # ============================================
+        # From menu button
+        if not reply:
+            reply = lambda text: bot.send_message(chat_id, text, parse_mode='Markdown')
     
     # TODO: Implement actual active users logic from database
-    # For now, demo response
     message = "📊 *Active Users*\n\n"
     message += "⏱️ Last 5 minutes\n"
     message += "👥 5 users\n\n"
@@ -55,4 +56,5 @@ async def execute(update, context, args, extra):
     message += "5. @user5 - 8 messages\n"
     
     await reply(message)
+    
     

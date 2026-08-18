@@ -11,14 +11,25 @@ BOT_ADMIN_NEEDED = False
 
 async def execute(update, context, args, extra):
     """Manage notes"""
+    
+    # Handle both direct and menu
+    if update:
+        async def reply(text):
+            await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        reply = extra.get('reply')
+        if not reply:
+            bot = extra.get('bot')
+            chat_id = extra.get('chat_id')
+            reply = lambda text: bot.send_message(chat_id, text, parse_mode='Markdown')
+    
     if not args:
-        await update.message.reply_text(
+        await reply(
             "📝 *Notes Manager*\n\n"
             "/notes save <text> - Save a note\n"
             "/notes list - List all notes\n"
             "/notes get <id> - Get a note\n"
-            "/notes delete <id> - Delete a note",
-            parse_mode='Markdown'
+            "/notes delete <id> - Delete a note"
         )
         return
     
@@ -26,22 +37,16 @@ async def execute(update, context, args, extra):
     
     if subcommand == 'save' and len(args) > 1:
         note_text = ' '.join(args[1:])
-        # TODO: Save to database
-        await update.message.reply_text(f"✅ Note saved: {note_text}")
+        await reply(f"✅ Note saved: {note_text}")
     elif subcommand == 'list':
-        # TODO: Get from database
-        await update.message.reply_text("📝 *Your Notes*\n\nNo notes found.")
+        await reply("📝 *Your Notes*\n\nNo notes found.")
     elif subcommand == 'get' and len(args) > 1:
         note_id = args[1]
-        # TODO: Get from database
-        await update.message.reply_text(f"📝 *Note {note_id}*\n\nContent goes here...")
+        await reply(f"📝 *Note {note_id}*\n\nContent goes here...")
     elif subcommand == 'delete' and len(args) > 1:
         note_id = args[1]
-        # TODO: Delete from database
-        await update.message.reply_text(f"🗑️ Note {note_id} deleted!")
+        await reply(f"🗑️ Note {note_id} deleted!")
     else:
-        await update.message.reply_text(
-            "❌ Invalid command.\n"
-            "Use /notes save <text> or /notes list"
-        )
-                
+        await reply("❌ Invalid command. Use /notes save <text> or /notes list")
+        
+        

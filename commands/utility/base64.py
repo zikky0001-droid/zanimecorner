@@ -14,15 +14,25 @@ BOT_ADMIN_NEEDED = False
 
 async def execute(update, context, args, extra):
     """Encode or decode Base64"""
+    
+    if update:
+        async def reply(text):
+            await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        reply = extra.get('reply')
+        if not reply:
+            bot = extra.get('bot')
+            chat_id = extra.get('chat_id')
+            reply = lambda text: bot.send_message(chat_id, text, parse_mode='Markdown')
+    
     if not args:
-        await update.message.reply_text(
+        await reply(
             "🔐 *Base64 Tool*\n\n"
             "Usage:\n"
             "/base64 encode <text> - Encode to Base64\n"
             "/base64 decode <text> - Decode from Base64\n\n"
             "Example:\n"
-            "/base64 encode Hello World",
-            parse_mode='Markdown'
+            "/base64 encode Hello World"
         )
         return
     
@@ -31,16 +41,16 @@ async def execute(update, context, args, extra):
     if action == 'encode' and len(args) > 1:
         text = ' '.join(args[1:])
         encoded = base64.b64encode(text.encode()).decode()
-        await update.message.reply_text(f"🔐 *Encoded:*\n`{encoded}`", parse_mode='Markdown')
+        await reply(f"🔐 *Encoded:*\n`{encoded}`")
         
     elif action == 'decode' and len(args) > 1:
         text = args[1]
         try:
             decoded = base64.b64decode(text).decode()
-            await update.message.reply_text(f"🔓 *Decoded:*\n`{decoded}`", parse_mode='Markdown')
+            await reply(f"🔓 *Decoded:*\n`{decoded}`")
         except:
-            await update.message.reply_text("❌ Invalid Base64 string!")
+            await reply("❌ Invalid Base64 string!")
     
     else:
-        await update.message.reply_text("❌ Invalid usage. Use /base64 for help.")
-        
+        await reply("❌ Invalid usage. Use /base64 for help.")
+                
