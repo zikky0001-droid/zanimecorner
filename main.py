@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 DEV ZIKKY TELEGRAM - Main Entry Point
-For Pterodactyl Panel
+For Pterodactyl Panel / Render
 """
 
 import sys
 import os
 import logging
 import signal
+import asyncio
 from pathlib import Path
 
 # Add current directory to path
@@ -87,7 +88,7 @@ def main():
         application.add_handler(MessageHandler(filters.ALL, message_handler))
         
         # ============================================
-        # START THE BOT
+        # START THE BOT (WITH CONFLICT FIX)
         # ============================================
         print("\n" + "="*50)
         print("✅ Bot connected successfully!")
@@ -99,9 +100,12 @@ def main():
         print("⚡⚡DEV ZIKKY TELEGRAM Bot is ready to receive messages 🔥💥🎉")
         print("="*50 + "\n")
         
-        # Start polling
-        logger.info("🚀 Starting bot polling...")
-        application.run_polling()
+        # ✅ FIX: Use drop_pending_updates to prevent Conflict error
+        logger.info("🚀 Starting bot polling with conflict prevention...")
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=['message', 'callback_query', 'my_chat_member']
+        )
         
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
@@ -116,4 +120,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
     
