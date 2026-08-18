@@ -1,5 +1,5 @@
-# Telegram Bot
-python-telegram-bot[job-queue]==22.5
+# Telegram Bot (with webhooks support)
+python-telegram-bot[job-queue,webhooks]==22.5
 
 # HTTP
 requests>=2.32.0
