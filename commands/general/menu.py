@@ -20,7 +20,7 @@ BOT_ADMIN_NEEDED = False
 # ============================================
 # BOT IMAGE PATH
 # ============================================
-BOT_IMAGE_PATH = pathlib.Path(__file__).parent.parent / 'utils' / 'bot_image.png'
+BOT_IMAGE_PATH = pathlib.Path(__file__).parent.parent.parent / 'utils' / 'bot_image.png'
 
 def get_bot_image():
     """Get bot image bytes if exists"""
@@ -66,7 +66,7 @@ COMMAND_LABELS = {
     'song': '🎵 Song',
     'video': '🎬 Video',
     'bomb': '💣 Bomb Game',
-    'tictactoe': '❌⭕ TicTacToe',
+    'tictactoe': '❌ ⭕ TicTacToe',
     'qwen': '🧠 Qwen AI',
     'wormgpt': '🐛 WormGPT',
 }
@@ -107,26 +107,43 @@ def get_commands_for_category(category):
     return commands
 
 # ============================================
-# SEND MENU WITH IMAGE
+# SEND MENU WITH IMAGE (FIXED)
 # ============================================
-async def send_menu_with_image(update_obj, context, text, reply_markup):
+async def send_menu_with_image(update_obj, context, text, reply_markup, is_callback=False):
     """Send menu with image"""
     image_bytes = get_bot_image()
     
-    if image_bytes:
-        await update_obj.message.reply_photo(
-            photo=image_bytes,
-            caption=text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+    if is_callback:
+        # From callback query - use query.message
+        query = update_obj.callback_query
+        if image_bytes:
+            # Edit caption and keep image
+            await query.edit_message_caption(
+                caption=text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            await query.edit_message_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
     else:
-        # Fallback to text if image not found
-        await update_obj.message.reply_text(
-            text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        # From direct message
+        if image_bytes:
+            await update_obj.message.reply_photo(
+                photo=image_bytes,
+                caption=text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            await update_obj.message.reply_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
 
 # ============================================
 # SEND CATEGORY MENU
@@ -171,8 +188,8 @@ async def send_category_menu(update_obj, context, category_key):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # ✅ Always send with image (new message)
-    await send_menu_with_image(update_obj, context, menu_text, reply_markup)
+    # ✅ Fixed: Pass is_callback=True
+    await send_menu_with_image(update_obj, context, menu_text, reply_markup, is_callback=True)
 
 # ============================================
 # SEND MAIN MENU (WITH IMAGE)
@@ -203,15 +220,15 @@ async def send_main_menu(update_obj, context, message=None):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if message:
-        # Edit existing message (keep image, update caption)
+        # Edit existing message - from callback
         await message.edit_caption(
             caption=menu_text,
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
     else:
-        # ✅ NEW message - send with image
-        await send_menu_with_image(update_obj, context, menu_text, reply_markup)
+        # NEW message - from direct command
+        await send_menu_with_image(update_obj, context, menu_text, reply_markup, is_callback=False)
 
 # ============================================
 # EXECUTE COMMAND FROM CALLBACK
@@ -233,8 +250,8 @@ async def execute_command_from_callback(query, command_name, context):
         'user_id': query.from_user.id,
         'user_name': query.from_user.first_name,
         'chat_type': query.message.chat.type,
-        'is_owner': False,  # Will be checked by the command
-        'is_admin': False,  # Will be checked by the command
+        'is_owner': False,
+        'is_admin': False,
         'is_bot_admin': True,
         'reply': query.message.reply_text,
         'bot': context.bot,
@@ -244,7 +261,6 @@ async def execute_command_from_callback(query, command_name, context):
     }
     
     try:
-        # Execute the command with empty args
         await cmd_func(None, context, [], extra)
     except Exception as e:
         await query.answer(f"Error: {str(e)[:50]}", show_alert=True)
@@ -285,5 +301,4 @@ async def execute(update_obj, context, args=None, extra=None):
         return
     
     await send_main_menu(update_obj, context)
-    
     
