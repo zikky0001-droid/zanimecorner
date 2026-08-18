@@ -14,3 +14,4 @@ Faker>=37.0.0
 
 # Port Bind
 aiohttp>=3.9.0
+aiofiles>=24.1.0
