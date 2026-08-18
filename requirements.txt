@@ -11,3 +11,6 @@ bs4==0.0.2
 
 # Fake Data
 Faker>=37.0.0
+
+# Port Bind
+aiohttp>=3.9.0

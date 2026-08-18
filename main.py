@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 DEV ZIKKY TELEGRAM - Main Entry Point
-For Pterodactyl Panel / Render
+For Render / Pterodactyl Panel
 """
 
 import sys
@@ -41,6 +41,47 @@ def handle_shutdown(signum, frame):
 # Register signal handlers
 signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
+
+# ============================================
+# START WEB SERVER FOR RENDER
+# ============================================
+async def start_web_server():
+    """Start a simple web server to keep Render alive"""
+    try:
+        from aiohttp import web
+        
+        async def health_check(request):
+            return web.Response(text="Bot is running!", status=200)
+        
+        async def index(request):
+            return web.Response(text="DEV ZIKKY TELEGRAM BOT", status=200)
+        
+        app = web.Application()
+        app.router.add_get('/', index)
+        app.router.add_get('/health', health_check)
+        
+        # Get port from environment or use 10000
+        port = int(os.environ.get('PORT', 10000))
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        
+        logger.info(f"🌐 Web server started on port {port}")
+        print(f"🌐 Web server started on port {port}")
+        
+        # Keep the server running
+        while True:
+            await asyncio.sleep(60)
+            
+    except ImportError:
+        logger.warning("⚠️ aiohttp not installed. Web server not started.")
+        print("⚠️ aiohttp not installed. Web server not started.")
+        
+        # Keep running without web server
+        while True:
+            await asyncio.sleep(60)
 
 # ============================================
 # MAIN FUNCTION
@@ -100,12 +141,33 @@ def main():
         print("⚡⚡DEV ZIKKY TELEGRAM Bot is ready to receive messages 🔥💥🎉")
         print("="*50 + "\n")
         
-        # ✅ FIX: Use drop_pending_updates to prevent Conflict error
-        logger.info("🚀 Starting bot polling with conflict prevention...")
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=['message', 'callback_query', 'my_chat_member']
-        )
+        # ✅ FIX: Run bot and web server concurrently
+        async def run_bot():
+            # Start the bot
+            await application.initialize()
+            await application.start()
+            
+            # Start polling
+            await application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=['message', 'callback_query', 'my_chat_member']
+            )
+            
+            logger.info("🚀 Bot polling started!")
+            print("🚀 Bot polling started!")
+            
+            # Keep running
+            while True:
+                await asyncio.sleep(1)
+        
+        # Run both the bot and web server
+        loop = asyncio.get_event_loop()
+        
+        # Start web server in background
+        asyncio.create_task(start_web_server())
+        
+        # Run the bot
+        loop.run_until_complete(run_bot())
         
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
@@ -120,5 +182,9 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
+    
+    
+    
     
     
