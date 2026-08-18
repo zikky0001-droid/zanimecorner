@@ -11,12 +11,35 @@ BOT_ADMIN_NEEDED = True
 
 async def execute(update, context, args, extra):
     """Configure welcome messages"""
+    
+    # ============================================
+    # HANDLE BOTH DIRECT COMMAND AND MENU BUTTON
+    # ============================================
+    
+    if update:
+        # Direct command
+        chat = update.effective_chat
+        user = update.effective_user
+        
+        async def reply(text):
+            await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        # From menu button
+        reply_func = extra.get('reply')
+        if reply_func:
+            reply = reply_func
+        else:
+            bot = extra.get('bot')
+            chat_id = extra.get('chat_id')
+            async def reply(text):
+                await bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown')
+    
     from utils.database import Database
     db = Database()
-    chat = update.effective_chat
+    chat_id = update.effective_chat.id if update else extra.get('chat_id')
     
     if not args:
-        settings = db.get_group_settings(chat.id)
+        settings = db.get_group_settings(chat_id)
         welcome_status = "✅ ON" if settings.get('welcome') else "❌ OFF"
         goodbye_status = "✅ ON" if settings.get('goodbye') else "❌ OFF"
         
@@ -31,21 +54,22 @@ async def execute(update, context, args, extra):
         message += "/goodbye off - Disable goodbye messages\n"
         message += "/goodbye set <message> - Set custom goodbye message"
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await reply(message)
         return
     
     subcommand = args[0].lower()
     
     if subcommand == 'on':
-        db.update_group_settings(chat.id, {'welcome': True})
-        await update.message.reply_text("✅ Welcome messages enabled for this group!")
+        db.update_group_settings(chat_id, {'welcome': True})
+        await reply("✅ Welcome messages enabled for this group!")
     elif subcommand == 'off':
-        db.update_group_settings(chat.id, {'welcome': False})
-        await update.message.reply_text("❌ Welcome messages disabled for this group!")
+        db.update_group_settings(chat_id, {'welcome': False})
+        await reply("❌ Welcome messages disabled for this group!")
     elif subcommand == 'set' and len(args) > 1:
         msg = ' '.join(args[1:])
         # TODO: Store custom welcome message
-        await update.message.reply_text(f"✅ Welcome message set:\n\n{msg}")
+        await reply(f"✅ Welcome message set:\n\n{msg}")
     else:
-        await update.message.reply_text("❌ Invalid command. Use /welcome for help.")
+        await reply("❌ Invalid command. Use /welcome for help.")
+        
         
