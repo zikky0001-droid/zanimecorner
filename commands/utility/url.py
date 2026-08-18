@@ -3,11 +3,14 @@ DEV ZIKKY TELEGRAM - URL / GOFILE Command
 
 Features:
 - Reply to a Telegram file with /url
-- Confirmation BEFORE downloading the file
-- Async Telegram download + Gofile upload
+- Confirmation BEFORE downloading the Telegram file
+- Async Telegram download
+- Async Gofile upload
 - HTML formatting throughout
 - Reliable Confirm / Cancel buttons
 - Temporary-file cleanup
+- File-size validation before download
+- Safe escaping of dynamic content
 """
 
 import html
@@ -18,6 +21,10 @@ from pathlib import Path
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+
+# ============================================================
+# COMMAND CONFIG
+# ============================================================
 
 COMMAND_NAME = "url"
 ALIASES = ["gofile", "upload", "download"]
@@ -40,33 +47,46 @@ MAX_DOCUMENT_SIZE = 1000 * 1024 * 1024
 
 GOFILE_UPLOAD_URL = "https://upload.gofile.io/uploadfile"
 
-TEMP_DIR = Path(__file__).parent.parent.parent / "tmp"
+TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "tmp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# These MUST be different from your menu callbacks.
+# ============================================================
+# CALLBACK DATA
+# ============================================================
+
+# Keep these unique so they do not conflict with menu buttons.
 CONFIRM_CALLBACK = "url_confirm_upload"
 CANCEL_CALLBACK = "url_cancel_upload"
 
 
 # ============================================================
-# HTML HELPER
+# HTML HELPERS
 # ============================================================
 
 def esc(value):
-    """Escape dynamic text for Telegram HTML."""
+    """
+    Safely escape dynamic values for Telegram HTML.
+    """
     return html.escape(str(value or ""))
 
 
 # ============================================================
-# FORMAT FILE SIZE
+# FILE SIZE
 # ============================================================
 
 def format_size(size_bytes):
+    """
+    Convert bytes into a readable file size.
+    """
+
     if not size_bytes:
         return "Unknown"
 
-    size_bytes = int(size_bytes)
+    try:
+        size_bytes = int(size_bytes)
+    except (TypeError, ValueError):
+        return "Unknown"
 
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -85,9 +105,14 @@ def format_size(size_bytes):
 # ============================================================
 
 def get_file_type(mime_type, file_name):
+    """
+    Determine the general file type.
+    """
+
     mime_type = (mime_type or "").lower()
     file_name = (file_name or "").lower()
 
+    # MIME detection
     if mime_type.startswith("image/"):
         return "image"
 
@@ -97,51 +122,94 @@ def get_file_type(mime_type, file_name):
     if mime_type.startswith("video/"):
         return "video"
 
+    # Extension detection
     extension = Path(file_name).suffix.lower()
 
-    if extension in {
-        ".jpg", ".jpeg", ".png", ".gif",
-        ".webp", ".bmp", ".svg"
-    }:
+    image_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".svg",
+    }
+
+    audio_extensions = {
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".aac",
+        ".flac",
+        ".m4a",
+    }
+
+    video_extensions = {
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".webm",
+        ".mkv",
+        ".mpeg",
+        ".mpg",
+    }
+
+    if extension in image_extensions:
         return "image"
 
-    if extension in {
-        ".mp3", ".wav", ".ogg",
-        ".aac", ".flac", ".m4a"
-    }:
+    if extension in audio_extensions:
         return "audio"
 
-    if extension in {
-        ".mp4", ".mov", ".avi",
-        ".webm", ".mkv", ".mpeg"
-    }:
+    if extension in video_extensions:
         return "video"
 
     return "document"
 
 
 def get_max_size(file_type):
-    return {
+    """
+    Return maximum allowed size for the file type.
+    """
+
+    limits = {
         "image": MAX_IMAGE_SIZE,
         "audio": MAX_AUDIO_SIZE,
         "video": MAX_VIDEO_SIZE,
         "document": MAX_DOCUMENT_SIZE,
-    }.get(file_type, MAX_DOCUMENT_SIZE)
+    }
+
+    return limits.get(
+        file_type,
+        MAX_DOCUMENT_SIZE,
+    )
 
 
-def file_type_label(file_type, sticker=False, animated=False):
+def file_type_label(
+    file_type,
+    sticker=False,
+    animated=False,
+):
+    """
+    Human-readable file type.
+    """
 
     if sticker:
         if animated:
             return "🎨 Animated Sticker"
+
         return "🎨 Static Sticker"
 
-    return {
+    labels = {
         "image": "🖼️ Image",
         "audio": "🎵 Audio",
         "video": "🎬 Video",
         "document": "📄 Document",
-    }.get(file_type, "📁 File")
+    }
+
+    return labels.get(
+        file_type,
+        "📁 File",
+    )
 
 
 # ============================================================
@@ -149,50 +217,62 @@ def file_type_label(file_type, sticker=False, animated=False):
 # ============================================================
 
 def is_animated_sticker(sticker):
+    """
+    Detect animated/video stickers.
+    """
+
     return bool(
         getattr(sticker, "is_animated", False)
         or getattr(sticker, "is_video", False)
         or getattr(sticker, "mime_type", "")
-        in {"video/webm", "video/mp4"}
+        in {
+            "video/webm",
+            "video/mp4",
+        }
     )
 
 
 # ============================================================
-# EXTRACT FILE INFORMATION
+# FILE EXTRACTION
 # ============================================================
 
 def extract_file_info(message):
     """
+    Extract Telegram file metadata.
+
     IMPORTANT:
+    This function DOES NOT download the file.
 
-    This function ONLY reads Telegram metadata.
-
-    It does NOT call bot.get_file().
-    It does NOT download anything.
-
-    Download happens only after the user presses Confirm Upload.
+    The actual Telegram download only happens
+    after the user presses Confirm Upload.
     """
 
+    # --------------------------------------------------------
     # DOCUMENT
+    # --------------------------------------------------------
+
     if message.document:
         item = message.document
 
-        name = item.file_name or "document"
+        file_name = item.file_name or "document"
 
         return {
             "file_id": item.file_id,
             "file_type": get_file_type(
                 item.mime_type,
-                name
+                file_name,
             ),
             "file_size": item.file_size or 0,
-            "file_name": name,
-            "mime_type": item.mime_type,
+            "file_name": file_name,
+            "mime_type": item.mime_type or "",
             "sticker": False,
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # PHOTO
+    # --------------------------------------------------------
+
     if message.photo:
         item = message.photo[-1]
 
@@ -206,7 +286,10 @@ def extract_file_info(message):
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # VIDEO
+    # --------------------------------------------------------
+
     if message.video:
         item = message.video
 
@@ -218,12 +301,18 @@ def extract_file_info(message):
                 item.file_name
                 or f"video_{int(time.time())}.mp4"
             ),
-            "mime_type": item.mime_type or "video/mp4",
+            "mime_type": (
+                item.mime_type
+                or "video/mp4"
+            ),
             "sticker": False,
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # AUDIO
+    # --------------------------------------------------------
+
     if message.audio:
         item = message.audio
 
@@ -235,12 +324,18 @@ def extract_file_info(message):
                 item.file_name
                 or f"audio_{int(time.time())}.mp3"
             ),
-            "mime_type": item.mime_type or "audio/mpeg",
+            "mime_type": (
+                item.mime_type
+                or "audio/mpeg"
+            ),
             "sticker": False,
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # VOICE
+    # --------------------------------------------------------
+
     if message.voice:
         item = message.voice
 
@@ -254,7 +349,10 @@ def extract_file_info(message):
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # VIDEO NOTE
+    # --------------------------------------------------------
+
     if message.video_note:
         item = message.video_note
 
@@ -270,26 +368,35 @@ def extract_file_info(message):
             "animated": False,
         }
 
+    # --------------------------------------------------------
     # STICKER
+    # --------------------------------------------------------
+
     if message.sticker:
         item = message.sticker
 
         animated = is_animated_sticker(item)
 
+        if animated:
+            file_name = (
+                f"sticker_animated_"
+                f"{int(time.time())}.webm"
+            )
+            mime_type = "video/webm"
+            file_type = "video"
+        else:
+            file_name = (
+                f"sticker_{int(time.time())}.webp"
+            )
+            mime_type = "image/webp"
+            file_type = "image"
+
         return {
             "file_id": item.file_id,
-            "file_type": "video" if animated else "image",
+            "file_type": file_type,
             "file_size": item.file_size or 0,
-            "file_name": (
-                f"sticker_animated_{int(time.time())}.webm"
-                if animated
-                else f"sticker_{int(time.time())}.webp"
-            ),
-            "mime_type": (
-                "video/webm"
-                if animated
-                else "image/webp"
-            ),
+            "file_name": file_name,
+            "mime_type": mime_type,
             "sticker": True,
             "animated": animated,
         }
@@ -298,16 +405,16 @@ def extract_file_info(message):
 
 
 # ============================================================
-# DOWNLOAD FROM TELEGRAM
+# TELEGRAM DOWNLOAD
 # ============================================================
 
 async def download_from_telegram(
     bot,
     file_id,
-    file_name
+    file_name,
 ):
     """
-    ACTUAL Telegram download.
+    Download the Telegram file.
 
     This function is ONLY called after confirmation.
     """
@@ -316,23 +423,38 @@ async def download_from_telegram(
 
     destination = (
         TEMP_DIR
-        / f"upload_{int(time.time() * 1000)}_{safe_name}"
+        / (
+            f"upload_"
+            f"{int(time.time() * 1000)}_"
+            f"{safe_name}"
+        )
     )
 
     try:
 
         print(
-            f"[URL] Starting Telegram download: {safe_name}"
+            f"[URL] Starting Telegram download: "
+            f"{safe_name}"
         )
 
-        telegram_file = await bot.get_file(file_id)
+        telegram_file = await bot.get_file(
+            file_id
+        )
 
         await telegram_file.download_to_drive(
             custom_path=str(destination)
         )
 
+        if not destination.exists():
+            print(
+                "[URL] Download reported success "
+                "but file does not exist."
+            )
+            return None
+
         print(
-            f"[URL] Telegram download complete: {destination}"
+            f"[URL] Telegram download complete: "
+            f"{destination}"
         )
 
         return destination
@@ -340,7 +462,8 @@ async def download_from_telegram(
     except Exception as error:
 
         print(
-            f"[URL] Telegram download error: {error}"
+            f"[URL] Telegram download error: "
+            f"{error}"
         )
 
         try:
@@ -357,15 +480,18 @@ async def download_from_telegram(
 # ============================================================
 
 async def upload_to_gofile(file_path):
+    """
+    Upload a local file to Gofile.
+    """
+
+    timeout = aiohttp.ClientTimeout(
+        total=None,
+        connect=30,
+        sock_connect=30,
+        sock_read=None,
+    )
 
     try:
-
-        timeout = aiohttp.ClientTimeout(
-            total=None,
-            connect=30,
-            sock_connect=30,
-            sock_read=None,
-        )
 
         async with aiohttp.ClientSession(
             timeout=timeout
@@ -373,13 +499,20 @@ async def upload_to_gofile(file_path):
 
             form = aiohttp.FormData()
 
-            with open(file_path, "rb") as file_handle:
+            with open(
+                file_path,
+                "rb",
+            ) as file_handle:
 
                 form.add_field(
                     "file",
                     file_handle,
-                    filename=Path(file_path).name,
-                    content_type="application/octet-stream",
+                    filename=Path(
+                        file_path
+                    ).name,
+                    content_type=(
+                        "application/octet-stream"
+                    ),
                 )
 
                 async with session.post(
@@ -387,41 +520,56 @@ async def upload_to_gofile(file_path):
                     data=form,
                 ) as response:
 
-                    response_text = await response.text()
+                    response_text = (
+                        await response.text()
+                    )
 
             print(
-                f"[GOFILE] HTTP Status: {response.status}"
+                f"[GOFILE] HTTP Status: "
+                f"{response.status}"
             )
 
             if response.status != 200:
+
+                print(
+                    "[GOFILE] HTTP error:"
+                )
                 print(
                     response_text[:1000]
                 )
+
                 return None
 
             try:
-                result = json.loads(response_text)
+
+                result = json.loads(
+                    response_text
+                )
 
             except json.JSONDecodeError:
+
                 print(
-                    "[GOFILE] Invalid JSON response"
+                    "[GOFILE] Invalid JSON response."
                 )
+
                 return None
 
             if result.get("status") != "ok":
 
                 print(
-                    f"[GOFILE] Upload failed: {result}"
+                    f"[GOFILE] Upload failed: "
+                    f"{result}"
                 )
 
-                return None
+                return result
 
             return result
 
     except Exception as error:
 
         print(
-            f"[GOFILE] Upload error: {error}"
+            f"[GOFILE] Upload error: "
+            f"{error}"
         )
 
         return None
@@ -435,20 +583,30 @@ async def execute(
     update,
     context,
     args=None,
-    extra=None
+    extra=None,
 ):
+    """
+    Main command entry point.
+    """
 
     args = args or []
 
-    # Callback protection
+    # --------------------------------------------------------
+    # CALLBACK
+    # --------------------------------------------------------
+
     if update and update.callback_query:
 
         await button_callback(
             update,
-            context
+            context,
         )
 
         return
+
+    # --------------------------------------------------------
+    # MESSAGE
+    # --------------------------------------------------------
 
     if not update or not update.message:
         return
@@ -457,28 +615,37 @@ async def execute(
         update.message.reply_to_message
     )
 
+    # --------------------------------------------------------
     # /url
+    # --------------------------------------------------------
+
     if not args and not reply_message:
 
         await show_menu(update)
 
         return
 
-    # Reply to file
+    # --------------------------------------------------------
+    # REPLY TO FILE
+    # --------------------------------------------------------
+
     if reply_message:
 
         await handle_reply(
             update,
             context,
-            reply_message
+            reply_message,
         )
 
         return
 
-    # URL argument
+    # --------------------------------------------------------
+    # /url <url>
+    # --------------------------------------------------------
+
     await handle_url(
         update,
-        args
+        args,
     )
 
 
@@ -487,49 +654,64 @@ async def execute(
 # ============================================================
 
 async def show_menu(update):
+    """
+    Show URL command help.
+    """
 
-    text = """╭━━━༺ <b>📦 URL / GOFILE</b> ༻━━━╮
-┃
-┃ 🔧 <b>COMMANDS</b> :
-┃
-┃ 📤 <b>UPLOAD FILE</b> :
-┃ Reply to a file with:
-┃ <code>/url</code>
-┃
-┃ 📥 <b>DOWNLOAD FROM URL</b> :
-┃ <code>/url &lt;url&gt;</code>
-┃
-┃ 📋 <b>SUPPORTED FILES</b> :
-┃ 📸 Images
-┃ 🎵 Audio
-┃ 🎬 Video
-┃ 📄 Documents
-┃ 🎨 Stickers
-┃
-┃ 💡 <b>EXAMPLES</b> :
-┃ Reply to a file with <code>/url</code>
-┃ <code>/url https://example.com/file.mp4</code>
-┃
-╰━━━━━━━━━━━━━━━━━━╯
-<blockquote>ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ</blockquote>"""
+    text = (
+        "╭━━━༺ <b>📦 URL / GOFILE</b> ༻━━━╮\n"
+        "┃\n"
+        "┃ 🔧 <b>COMMANDS</b> :\n"
+        "┃\n"
+        "┃ 📤 <b>UPLOAD FILE</b> :\n"
+        "┃ Reply to a file with:\n"
+        "┃ <code>/url</code>\n"
+        "┃\n"
+        "┃ 📥 <b>DOWNLOAD FROM URL</b> :\n"
+        "┃ <code>/url &lt;url&gt;</code>\n"
+        "┃\n"
+        "┃ 📋 <b>SUPPORTED FILES</b> :\n"
+        "┃ 📸 Images\n"
+        "┃ 🎵 Audio\n"
+        "┃ 🎬 Video\n"
+        "┃ 📄 Documents\n"
+        "┃ 🎨 Stickers\n"
+        "┃\n"
+        "┃ 💡 <b>EXAMPLES</b> :\n"
+        "┃ Reply to a file with "
+        "<code>/url</code>\n"
+        "┃ <code>/url "
+        "https://example.com/file.mp4"
+        "</code>\n"
+        "┃\n"
+        "╰━━━━━━━━━━━━━━━━━━╯\n"
+        "<blockquote>"
+        "ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ"
+        "</blockquote>"
+    )
 
     await update.message.reply_text(
         text,
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
 # ============================================================
-# DETECT FILE
+# HANDLE REPLIED FILE
 # ============================================================
 
 async def handle_reply(
     update,
     context,
-    reply_message
+    reply_message,
 ):
+    """
+    Detect the replied Telegram file.
 
-    # Metadata only.
+    IMPORTANT:
+    No download occurs here.
+    """
+
     info = extract_file_info(
         reply_message
     )
@@ -538,9 +720,13 @@ async def handle_reply(
 
         await update.message.reply_text(
             "❌ <b>Unsupported file type</b>\n\n"
-            "Supported: Images, Audio, Video, "
-            "Documents and Stickers.",
-            parse_mode="HTML"
+            "Supported files:\n"
+            "• Images\n"
+            "• Audio\n"
+            "• Video\n"
+            "• Documents\n"
+            "• Stickers",
+            parse_mode="HTML",
         )
 
         return
@@ -551,33 +737,37 @@ async def handle_reply(
         info["file_type"]
     )
 
-    # Check known size BEFORE download.
+    # --------------------------------------------------------
+    # SIZE CHECK
+    # --------------------------------------------------------
+
     if (
         file_size
         and file_size > max_size
     ):
 
+        type_label = file_type_label(
+            info["file_type"],
+            info["sticker"],
+            info["animated"],
+        )
+
         await update.message.reply_text(
-            f"❌ <b>File too large</b>\n\n"
+            "❌ <b>File too large</b>\n\n"
             f"📁 <b>Type:</b> "
-            f"{esc(file_type_label("
-            f"info['file_type'], "
-            f"info['sticker'], "
-            f"info['animated']))}\n"
+            f"{esc(type_label)}\n"
             f"📦 <b>Size:</b> "
             f"{esc(format_size(file_size))}\n"
             f"📊 <b>Maximum:</b> "
             f"{esc(format_size(max_size))}",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
 
         return
 
-    # ========================================================
-    # IMPORTANT:
-    # We save metadata ONLY.
-    # No Telegram download happens here.
-    # ========================================================
+    # --------------------------------------------------------
+    # STORE METADATA ONLY
+    # --------------------------------------------------------
 
     context.user_data[
         "pending_upload"
@@ -588,40 +778,44 @@ async def handle_reply(
             [
                 InlineKeyboardButton(
                     "📤 Confirm Upload",
-                    callback_data=CONFIRM_CALLBACK
+                    callback_data=(
+                        CONFIRM_CALLBACK
+                    ),
                 ),
                 InlineKeyboardButton(
                     "❌ Cancel",
-                    callback_data=CANCEL_CALLBACK
-                )
+                    callback_data=(
+                        CANCEL_CALLBACK
+                    ),
+                ),
             ]
         ]
     )
 
+    type_label = file_type_label(
+        info["file_type"],
+        info["sticker"],
+        info["animated"],
+    )
+
     text = (
         "📤 <b>File detected</b>\n\n"
-
         f"📁 <b>Type:</b> "
-        f"{esc(file_type_label("
-        f"info['file_type'], "
-        f"info['sticker'], "
-        f"info['animated']))}\n"
-
+        f"{esc(type_label)}\n"
         f"📦 <b>Size:</b> "
         f"{esc(format_size(file_size))}\n"
-
         f"📄 <b>Name:</b> "
         f"<code>{esc(info['file_name'])}</code>\n\n"
-
-        "⚡ <b>Ready to upload to Gofile?</b>\n"
+        "⚡ <b>Ready to upload to Gofile?</b>\n\n"
         "The file will only be downloaded "
-        "after you confirm."
+        "from Telegram after you press "
+        "<b>Confirm Upload</b>."
     )
 
     await update.message.reply_text(
         text,
         parse_mode="HTML",
-        reply_markup=keyboard
+        reply_markup=keyboard,
     )
 
 
@@ -631,13 +825,28 @@ async def handle_reply(
 
 async def handle_url(
     update,
-    args
+    args,
 ):
+    """
+    Handle /url <url>.
 
-    url = args[0].strip()
+    Direct URL downloading is intentionally
+    kept separate from Telegram-file uploading.
+    """
+
+    if not args:
+
+        await show_menu(update)
+
+        return
+
+    url = str(args[0]).strip()
 
     if not url.startswith(
-        ("http://", "https://")
+        (
+            "http://",
+            "https://",
+        )
     ):
 
         await update.message.reply_text(
@@ -645,30 +854,36 @@ async def handle_url(
             "Please provide a URL beginning "
             "with <code>http://</code> or "
             "<code>https://</code>.",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
 
         return
+
+    # Direct URL downloading is not implemented
+    # in the current version.
 
     await update.message.reply_text(
         "📥 <b>URL download</b>\n\n"
         "Direct URL downloading is not "
         "enabled in this version yet.\n\n"
-        "💡 Reply to a Telegram file with "
-        "<code>/url</code> to upload it "
-        "to Gofile.",
-        parse_mode="HTML"
+        "💡 To upload a Telegram file to "
+        "Gofile, reply to the file with "
+        "<code>/url</code>.",
+        parse_mode="HTML",
     )
 
 
 # ============================================================
-# BUTTON HANDLER
+# CALLBACK HANDLER
 # ============================================================
 
 async def button_callback(
     update,
-    context
+    context,
 ):
+    """
+    Handle Confirm / Cancel buttons.
+    """
 
     query = update.callback_query
 
@@ -677,16 +892,29 @@ async def button_callback(
 
     data = query.data or ""
 
-    # Ignore menu buttons.
+    # --------------------------------------------------------
+    # ONLY HANDLE OUR CALLBACKS
+    # --------------------------------------------------------
+
     if data not in {
         CONFIRM_CALLBACK,
-        CANCEL_CALLBACK
+        CANCEL_CALLBACK,
     }:
         return
 
-    # IMPORTANT:
-    # Answer immediately so the button stops spinning.
-    await query.answer()
+    # --------------------------------------------------------
+    # ANSWER IMMEDIATELY
+    #
+    # This stops Telegram's button spinner.
+    # --------------------------------------------------------
+
+    try:
+        await query.answer()
+    except Exception as error:
+        print(
+            f"[URL] Callback answer error: "
+            f"{error}"
+        )
 
     # ========================================================
     # CANCEL
@@ -696,13 +924,22 @@ async def button_callback(
 
         context.user_data.pop(
             "pending_upload",
-            None
+            None,
         )
 
-        await query.edit_message_text(
-            "❌ <b>Upload cancelled.</b>",
-            parse_mode="HTML"
-        )
+        try:
+
+            await query.edit_message_text(
+                "❌ <b>Upload cancelled.</b>",
+                parse_mode="HTML",
+            )
+
+        except Exception as error:
+
+            print(
+                f"[URL] Cancel edit error: "
+                f"{error}"
+            )
 
         return
 
@@ -716,133 +953,263 @@ async def button_callback(
 
     if not pending:
 
-        await query.edit_message_text(
-            "⚠️ <b>Session expired.</b>\n\n"
-            "Reply to the file with "
-            "<code>/url</code> again.",
-            parse_mode="HTML"
-        )
+        try:
+
+            await query.edit_message_text(
+                "⚠️ <b>Session expired.</b>\n\n"
+                "Reply to the file with "
+                "<code>/url</code> again.",
+                parse_mode="HTML",
+            )
+
+        except Exception:
+            pass
 
         return
 
-    # Remove buttons immediately.
-    # This prevents double-click uploads.
+    # --------------------------------------------------------
+    # PREVENT DOUBLE CLICK
+    # --------------------------------------------------------
 
-    await query.edit_message_text(
-        "⏳ <b>Preparing upload...</b>\n\n"
-        f"📄 <code>"
-        f"{esc(pending['file_name'])}"
-        f"</code>\n"
-        f"📦 {esc(format_size("
-        f"pending['file_size']))}\n\n"
-        "⬇️ Downloading from Telegram...",
-        parse_mode="HTML"
+    context.user_data[
+        "pending_upload"
+    ] = {
+        **pending,
+        "processing": True,
+    }
+
+    file_name = pending.get(
+        "file_name",
+        "file",
     )
+
+    file_size = pending.get(
+        "file_size",
+        0,
+    )
+
+    # --------------------------------------------------------
+    # REMOVE BUTTONS / SHOW DOWNLOAD
+    # --------------------------------------------------------
+
+    try:
+
+        await query.edit_message_text(
+            "⏳ <b>Preparing upload...</b>\n\n"
+            f"📄 <code>{esc(file_name)}</code>\n"
+            f"📦 {esc(format_size(file_size))}\n\n"
+            "⬇️ <b>Downloading from Telegram...</b>",
+            parse_mode="HTML",
+        )
+
+    except Exception as error:
+
+        print(
+            f"[URL] Progress message error: "
+            f"{error}"
+        )
 
     file_path = None
 
     try:
 
         # ====================================================
-        # THIS IS THE FIRST ACTUAL DOWNLOAD.
+        # ACTUAL TELEGRAM DOWNLOAD
+        #
+        # THIS IS THE FIRST DOWNLOAD.
         # ====================================================
 
         file_path = await download_from_telegram(
             context.bot,
             pending["file_id"],
-            pending["file_name"]
+            file_name,
         )
 
         if not file_path:
 
-            await query.edit_message_text(
-                "❌ <b>Telegram download failed.</b>\n\n"
-                "Please try again.",
-                parse_mode="HTML"
+            try:
+
+                await query.edit_message_text(
+                    "❌ <b>Telegram download failed.</b>\n\n"
+                    "Please try again.",
+                    parse_mode="HTML",
+                )
+
+            except Exception:
+                pass
+
+            return
+
+        # ----------------------------------------------------
+        # CHECK ACTUAL DOWNLOADED SIZE
+        # ----------------------------------------------------
+
+        try:
+
+            actual_size = (
+                file_path.stat().st_size
             )
+
+        except Exception:
+
+            actual_size = 0
+
+        max_size = get_max_size(
+            pending["file_type"]
+        )
+
+        if (
+            actual_size
+            and actual_size > max_size
+        ):
+
+            try:
+
+                await query.edit_message_text(
+                    "❌ <b>File too large</b>\n\n"
+                    f"📦 <b>Downloaded:</b> "
+                    f"{esc(format_size(actual_size))}\n"
+                    f"📊 <b>Maximum:</b> "
+                    f"{esc(format_size(max_size))}",
+                    parse_mode="HTML",
+                )
+
+            except Exception:
+                pass
 
             return
 
         # ====================================================
-        # UPLOAD TO GOFILE
+        # GOFILE UPLOAD
         # ====================================================
 
-        await query.edit_message_text(
-            "🚀 <b>Uploading to Gofile...</b>\n\n"
-            f"📄 <code>"
-            f"{esc(pending['file_name'])}"
-            f"</code>\n"
-            f"📦 {esc(format_size("
-            f"pending['file_size']))}\n\n"
-            "⚡ Please wait...",
-            parse_mode="HTML"
-        )
+        try:
+
+            await query.edit_message_text(
+                "🚀 <b>Uploading to Gofile...</b>\n\n"
+                f"📄 <code>{esc(file_name)}</code>\n"
+                f"📦 "
+                f"{esc(format_size(actual_size or file_size))}\n\n"
+                "⚡ <b>Please wait...</b>",
+                parse_mode="HTML",
+            )
+
+        except Exception as error:
+
+            print(
+                f"[URL] Upload progress error: "
+                f"{error}"
+            )
 
         result = await upload_to_gofile(
             file_path
         )
+
+        # ====================================================
+        # SUCCESS
+        # ====================================================
 
         if (
             result
             and result.get("status") == "ok"
         ):
 
-            data = result.get(
-                "data"
-            ) or {}
-
-            download_page = data.get(
-                "downloadPage"
+            result_data = (
+                result.get("data")
+                or {}
             )
 
-            file_name = (
-                data.get("fileName")
-                or pending["file_name"]
+            download_page = (
+                result_data.get(
+                    "downloadPage"
+                )
+            )
+
+            uploaded_file_name = (
+                result_data.get(
+                    "fileName"
+                )
+                or file_name
+            )
+
+            uploaded_size = (
+                actual_size
+                or file_size
             )
 
             if download_page:
 
+                # Telegram HTML allows href attributes.
+                # Escape the URL to avoid malformed markup.
+
+                safe_download_page = esc(
+                    download_page
+                )
+
                 link_html = (
-                    f'<a href="{esc(download_page)}">'
-                    f'Open Gofile Link'
-                    f'</a>'
+                    f'<a href="{safe_download_page}">'
+                    "🔗 Open Gofile Link"
+                    "</a>"
                 )
 
             else:
-                link_html = "Link unavailable"
 
-            await query.edit_message_text(
-                "✅ <b>Upload Successful!</b>\n\n"
+                link_html = (
+                    "🔗 Link unavailable"
+                )
 
-                f"📄 <b>File:</b> "
-                f"<code>{esc(file_name)}</code>\n"
-
-                f"📦 <b>Size:</b> "
-                f"{esc(format_size("
-                f"pending['file_size']))}\n\n"
-
-                f"🔗 {link_html}\n\n"
-
+            success_text = (
+                "╭━━━༺ <b>✅ UPLOAD SUCCESSFUL</b> ༻━━━╮\n"
+                "┃\n"
+                f"┃ 📄 <b>File:</b> "
+                f"<code>{esc(uploaded_file_name)}</code>\n"
+                f"┃ 📦 <b>Size:</b> "
+                f"{esc(format_size(uploaded_size))}\n"
+                "┃\n"
+                f"┃ {link_html}\n"
+                "┃\n"
+                "╰━━━━━━━━━━━━━━━━━━╯\n"
                 "<blockquote>"
-                "ᴘᴏᴡᴇʀᴇᴅ ʙʏ "
-                "ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ"
-                "</blockquote>",
-
-                parse_mode="HTML",
-                disable_web_page_preview=True
+                "ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴅᴇᴠ ᴢɪᴋᴋʏ ᴍᴅ"
+                "</blockquote>"
             )
+
+            try:
+
+                await query.edit_message_text(
+                    success_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+
+            except Exception as error:
+
+                print(
+                    f"[URL] Success message error: "
+                    f"{error}"
+                )
+
+            return
+
+        # ====================================================
+        # GOFILE FAILURE
+        # ====================================================
+
+        if result:
+
+            error_message = result.get(
+                "message"
+            ) or result.get(
+                "error"
+            ) or "Unknown Gofile error"
 
         else:
 
             error_message = (
-                result.get(
-                    "message",
-                    "Unknown Gofile error"
-                )
-                if result
-                else
                 "No response from Gofile"
             )
+
+        try:
 
             await query.edit_message_text(
                 "❌ <b>Upload Failed</b>\n\n"
@@ -850,26 +1217,46 @@ async def button_callback(
                 f"{esc(error_message)}"
                 f"</code>\n\n"
                 "Please try again later.",
-                parse_mode="HTML"
+                parse_mode="HTML",
+            )
+
+        except Exception as error:
+
+            print(
+                f"[URL] Failure message error: "
+                f"{error}"
             )
 
     except Exception as error:
 
         print(
-            f"[URL] Upload error: {error}"
+            f"[URL] Upload error: "
+            f"{error}"
         )
 
-        await query.edit_message_text(
-            "❌ <b>Upload Failed</b>\n\n"
-            f"Error: <code>"
-            f"{esc(str(error)[:200])}"
-            f"</code>",
-            parse_mode="HTML"
-        )
+        try:
+
+            await query.edit_message_text(
+                "❌ <b>Upload Failed</b>\n\n"
+                f"Error: <code>"
+                f"{esc(str(error)[:300])}"
+                f"</code>",
+                parse_mode="HTML",
+            )
+
+        except Exception as edit_error:
+
+            print(
+                f"[URL] Error message edit failed: "
+                f"{edit_error}"
+            )
 
     finally:
 
-        # Always delete temporary file.
+        # ====================================================
+        # CLEAN TEMP FILE
+        # ====================================================
+
         if file_path:
 
             try:
@@ -879,6 +1266,11 @@ async def button_callback(
                 if path.exists():
                     path.unlink()
 
+                    print(
+                        f"[URL] Temporary file "
+                        f"deleted: {path}"
+                    )
+
             except Exception as cleanup_error:
 
                 print(
@@ -886,24 +1278,38 @@ async def button_callback(
                     f"{cleanup_error}"
                 )
 
+        # ====================================================
+        # CLEAR PENDING UPLOAD
+        # ====================================================
+
         context.user_data.pop(
             "pending_upload",
-            None
+            None,
         )
 
 
 # ============================================================
-# DO NOT REGISTER A CATCH-ALL CALLBACK HERE
+# HANDLER REGISTRATION
 # ============================================================
 
 def register_handlers(application):
     """
-    Callback routing is handled centrally in main.py.
+    Callback routing is handled centrally by main.py.
 
-    Do NOT add:
-        CallbackQueryHandler(button_callback)
+    Do NOT register a catch-all CallbackQueryHandler here.
 
-    here without a pattern, because that can steal menu callbacks.
+    Your central callback router should forward:
+
+        url_confirm_upload
+        url_cancel_upload
+
+    to:
+
+        button_callback(update, context)
+
+    without stealing unrelated menu callbacks.
     """
+
     return
+    
     
